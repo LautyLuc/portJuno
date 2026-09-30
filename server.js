@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, '.env.local') })
 const app = express()
 const FileStore = FileStoreFactory(session)
-const port = Number(process.env.PORT || 3001)
+const port = Number(process.env.PORT || 3000)
 const production = process.env.NODE_ENV === 'production'
 const dataDir = path.join(__dirname, 'data')
 const uploadsDir = path.join(__dirname, 'uploads')
