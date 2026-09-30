@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronLeft, ChevronRight, Clapperboard, GripVertical, Images, Menu, Plus, Search, Trash2, X } from 'lucide-react'
 
-const initialPosts = [
-  { id: 1, type: 'Carrusel', title: 'La pausa también es parte del viaje', caption: 'Costa atlántica, 2024. Unos días para mirar sin apuro.', location: 'MAR DEL PLATA, ARGENTINA', date: '12.06.24', media: ['https://images.unsplash.com/photo-1473116763249-2faaef81ccda?auto=format&fit=crop&w=1400&q=85','https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=1400&q=85'] },
-  { id: 2, type: 'Video', title: 'Ritmo de ciudad', caption: 'Buenos Aires se mueve distinto cuando cae el sol.', location: 'BUENOS AIRES, ARGENTINA', date: '04.05.24', media: [{src:'https://videos.pexels.com/video-files/3129671/3129671-hd_1920_1080_25fps.mp4',video:true}], cover: 'https://images.unsplash.com/photo-1519608487953-e999c86e7455?auto=format&fit=crop&w=1000&q=85' },
-  { id: 3, type: 'Foto', title: 'Luz de invierno', caption: 'Pequeñas escenas, grandes silencios.', location: 'BARILOCHE, ARGENTINA', date: '19.08.24', media: ['https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1400&q=85'] },
-  { id: 4, type: 'Carrusel', title: 'Entre montañas', caption: 'Un recorrido en cuatro momentos por el sur.', location: 'PATAGONIA, ARGENTINA', date: '02.03.24', media: ['https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1400&q=85','https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1400&q=85','https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=1400&q=85'] },
-]
 const projectCategories = [
   { value: 'branding', label: 'Branding' },
   { value: 'diseno-web', label: 'Diseño web' },
@@ -33,7 +27,7 @@ function LoginPage() {
 }
 
 function Portfolio() {
-  const [posts, setPosts] = useState(initialPosts)
+  const [posts, setPosts] = useState([])
   const [filter, setFilter] = useState('Todo')
   const [categoryFilter, setCategoryFilter] = useState('Todo')
   const [query, setQuery] = useState('')
@@ -48,12 +42,11 @@ function Portfolio() {
   const [uploadPercent, setUploadPercent] = useState(0)
   const [uploadStage, setUploadStage] = useState('')
   useEffect(() => {
-    Promise.all([fetch('/api/posts'), fetch('/api/deleted-seeds'), fetch('/api/feed-order')]).then(async ([postsResponse, hiddenResponse, orderResponse]) => {
+    Promise.all([fetch('/api/posts'), fetch('/api/feed-order')]).then(async ([postsResponse, orderResponse]) => {
       const saved = postsResponse.ok ? await postsResponse.json() : []
-      const hidden = hiddenResponse.ok ? await hiddenResponse.json() : []
       const order = orderResponse.ok ? await orderResponse.json() : []
       const rank = new Map(order.map((id, index) => [String(id), index]))
-      setPosts([...saved, ...initialPosts.filter(post => !hidden.includes(post.id))].sort((a, b) => (rank.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (rank.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER)))
+      setPosts(saved.sort((a, b) => (rank.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (rank.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER)))
     }).catch(() => {})
     fetch('/api/auth/status').then(response => response.json()).then(status => setAdmin(status.authenticated)).catch(() => {})
   }, [])
@@ -146,7 +139,7 @@ function Portfolio() {
     <section className="work" id="trabajo"><div className="section-top"><div><div className="eyebrow"><span className="eyebrow-line"/> SELECCIÓN PERSONAL</div><h2>Proyectos <em>destacados</em></h2></div><div className="section-meta"><div className="work-meta">{String(visible.length).padStart(2,'0')} PUBLICACIONES</div>{admin&&<button className={'reorder-toggle '+(reorderMode?'active':'')} onClick={toggleReorder}><GripVertical size={14}/>{reorderMode?'LISTO':'ORDENAR FEED'}</button>}</div></div>
       {!reorderMode ? <><div className="toolbar"><div className="filters">{['Todo','Foto','Video','Carrusel'].map(f=><button key={f} onClick={()=>setFilter(f)} className={filter===f?'selected':''}>{f}</button>)}</div><label className="search"><Search size={15}/><input placeholder="Buscar historias" value={query} onChange={e=>setQuery(e.target.value)}/></label></div>{activeCategories.length>0&&<div className="category-toolbar"><span>CATEGOR?AS</span><div className="filters"><button className={categoryFilter==='Todo'?'selected':''} onClick={()=>setCategoryFilter('Todo')}>Todas</button>{activeCategories.map(category=><button key={category.value} className={categoryFilter===category.value?'selected':''} onClick={()=>setCategoryFilter(category.value)}>{category.label}</button>)}</div></div>}</> : <div className="reorder-hint"><GripVertical size={15}/> Arrastr? las publicaciones para cambiar el orden. En celular, us? las flechas.</div>}
       <div className="grid">{visible.map((post,i)=><article key={post.id} className={'post-card '+(reorderMode?'reorder-card ':'')+(draggingId===post.id?'is-dragging':'')} onClick={()=>{if(!reorderMode){setActive(post);setSlide(0)}}} onDragOver={event=>{if(reorderMode)event.preventDefault()}} onDrop={event=>{if(!reorderMode)return;event.preventDefault();const fromId=event.dataTransfer.getData('text/plain');setDraggingId(null);movePost(fromId,post.id)}}><div className="post-image">{post.cover?<img src={post.cover} loading="lazy"/>:post.media[0]?.video?<video className="post-thumb-video" src={post.media[0].src||post.media[0]} muted playsInline preload="metadata"/>:<img src={typeof post.media[0]==='string'?post.media[0]:post.media[0]?.src} loading="lazy"/>}<div className="image-overlay"/><span className="post-kind">{post.type==='Video'?<Clapperboard size={13}/>:post.type==='Carrusel'?<Images size={13}/>:<Camera size={13}/>} {post.type.toUpperCase()}</span>{post.type==='Carrusel'&&<span className="multiple">{post.media.length} <Images size={13}/></span>}{admin&&<button className="delete-post" aria-label={`Borrar ${post.title}`} title="Borrar publicaci?n" onClick={event=>deletePost(event,post)}><Trash2 size={16}/></button>}{admin&&reorderMode&&<div className="drag-controls"><button type="button" className="drag-handle" draggable onClick={event=>event.stopPropagation()} onDragStart={event=>{event.dataTransfer.setData('text/plain',String(post.id));event.dataTransfer.effectAllowed='move';setDraggingId(post.id)}} onDragEnd={()=>setDraggingId(null)} aria-label={`Arrastrar ${post.title}`} title="Arrastrar para ordenar"><GripVertical size={17}/></button><div><button type="button" disabled={i===0} onClick={event=>{event.stopPropagation();movePost(post.id,visible[i-1]?.id)}} aria-label="Mover hacia arriba"><ArrowUp size={14}/></button><button type="button" disabled={i===visible.length-1} onClick={event=>{event.stopPropagation();movePost(post.id,visible[i+1]?.id)}} aria-label="Mover hacia abajo"><ArrowDown size={14}/></button></div></div>}{!reorderMode&&<button className="open-post" aria-label="Abrir publicaci?n"><ArrowUpRight/></button>}</div><div className="post-info"><div><h3>{post.title}</h3><p>{post.caption}</p></div><span className="post-date">{post.date}</span>{categoryLabel(post.category)&&<span className="post-category">{categoryLabel(post.category)}</span>}<div className="post-location">{post.location}</div></div></article>)}</div>
-      {visible.length===0&&<div className="empty">No encontramos publicaciones con esa búsqueda.</div>}
+      {visible.length===0&&<div className="empty">{posts.length===0?'Todav?a no hay publicaciones.':query?'No encontramos publicaciones con esa b?squeda.':'No hay publicaciones para este filtro.'}</div>}
       <div className="work-footer"><span>UNA MIRADA PERSONAL SOBRE EL MUNDO.</span><span>DESLIZÁ PARA EXPLORAR <ArrowDown size={13}/></span></div>
     </section><section className="about" id="sobre"><div className="about-mark">J.</div><div><div className="eyebrow"><span className="eyebrow-line"/> EL ESTUDIO</div><h2>Ideas que<br/>se vuelven <em>marca.</em></h2></div><div className="about-copy"><p>Somos un estudio creativo que combina estrategia, identidad y contenido para que cada marca encuentre su propia forma de hacerse ver.</p><a href="mailto:contacto@junostudio.art">HABLEMOS DE TU MARCA <ArrowUpRight size={14}/></a></div></section>
     <footer><a className="wordmark" href="#inicio"><img src="/juno-logo.png" alt="Juno Studio"/></a><span>ESTUDIO CREATIVO ? ARGENTINA</span><div><a href="mailto:contacto@junostudio.art">CONTACTO</a><a href="#inicio">VOLVER ARRIBA ↑</a></div><small>© 2024 JUNO STUDIO</small></footer></main>

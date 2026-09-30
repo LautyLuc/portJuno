@@ -9,7 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 dotenv.config({ path: path.join(__dirname, '.env.local') })
@@ -17,13 +17,36 @@ const app = express()
 const FileStore = FileStoreFactory(session)
 const port = Number(process.env.PORT || 3000)
 const production = process.env.NODE_ENV === 'production'
-const dataDir = path.join(__dirname, 'data')
-const uploadsDir = path.join(__dirname, 'uploads')
+const deploymentVersionsDir = path.resolve(__dirname, '..', '..')
+const isHostingerVersion = path.basename(deploymentVersionsDir) === 'versions' && path.basename(path.dirname(deploymentVersionsDir)) === 'hbuilds'
+const hostingerDomainDir = isHostingerVersion ? path.resolve(deploymentVersionsDir, '..', '..') : null
+const storageRoot = process.env.JUNO_STORAGE_DIR?.trim() ? path.resolve(process.env.JUNO_STORAGE_DIR) : hostingerDomainDir ? path.join(hostingerDomainDir, 'juno-storage') : __dirname
+const dataDir = path.join(storageRoot, 'data')
+const uploadsDir = path.join(storageRoot, 'uploads')
 const postsFile = path.join(dataDir, 'posts.json')
-const deletedSeedsFile = path.join(dataDir, 'deleted-seeds.json')
 const feedOrderFile = path.join(dataDir, 'feed-order.json')
 const projectCategories = new Set(['branding', 'diseno-web', 'audiovisual', 'social-media', 'diseno'])
-const seedPostIds = new Set([1, 2, 3, 4])
+
+const migratePreviousHostingerData = async () => {
+  if (!isHostingerVersion) return
+  const currentBuild = path.basename(path.dirname(__dirname))
+  const versions = await readdir(deploymentVersionsDir, { withFileTypes: true })
+  const candidates = (await Promise.all(versions.filter(version => version.isDirectory() && version.name !== currentBuild).map(async version => {
+    const versionApp = path.join(deploymentVersionsDir, version.name, 'nodejs')
+    try { return { versionApp, modified: (await stat(path.join(versionApp, 'data', 'posts.json'))).mtimeMs } } catch { return null }
+  }))).filter(Boolean).sort((a, b) => b.modified - a.modified)
+  const previousApp = candidates[0]?.versionApp
+  if (!previousApp) return
+  await mkdir(dataDir, { recursive: true })
+  await mkdir(uploadsDir, { recursive: true })
+  let migrated = false
+  for (const name of ['posts.json', 'feed-order.json']) {
+    try { await stat(path.join(dataDir, name)); continue } catch (error) { if (error.code !== 'ENOENT') throw error }
+    try { await copyFile(path.join(previousApp, 'data', name), path.join(dataDir, name)); migrated = true } catch (error) { if (error.code !== 'ENOENT') throw error }
+  }
+  try { await cp(path.join(previousApp, 'uploads'), uploadsDir, { recursive: true, force: false, errorOnExist: false }); migrated = true } catch (error) { if (error.code !== 'ENOENT') throw error }
+  if (migrated) console.log('Se migraron publicaciones y archivos de la versión anterior a juno-storage.')
+}
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.SESSION_SECRET) {
   console.error('Faltan ADMIN_USERNAME, ADMIN_PASSWORD o SESSION_SECRET en el entorno.')
@@ -34,6 +57,7 @@ if (production && (!process.env.APP_ORIGIN || !process.env.SESSION_SECRET || pro
   process.exit(1)
 }
 
+await migratePreviousHostingerData()
 await mkdir(dataDir, { recursive: true })
 await mkdir(uploadsDir, { recursive: true })
 app.disable('x-powered-by')
@@ -74,9 +98,6 @@ const sameSecret = (provided, expected) => {
 }
 const readPosts = async () => {
   try { return JSON.parse(await readFile(postsFile, 'utf8')) } catch (error) { if (error.code === 'ENOENT') return []; throw error }
-}
-const readDeletedSeedIds = async () => {
-  try { return JSON.parse(await readFile(deletedSeedsFile, 'utf8')) } catch (error) { if (error.code === 'ENOENT') return []; throw error }
 }
 const readFeedOrder = async () => {
   try { return JSON.parse(await readFile(feedOrderFile, 'utf8')) } catch (error) { if (error.code === 'ENOENT') return []; throw error }
@@ -126,14 +147,11 @@ app.get('/api/posts', async (_req, res, next) => {
 app.get('/api/feed-order', async (_req, res, next) => {
   try { res.json(await readFeedOrder()) } catch (error) { next(error) }
 })
-app.get('/api/deleted-seeds', async (_req, res, next) => {
-  try { res.json(await readDeletedSeedIds()) } catch (error) { next(error) }
-})
 app.post('/api/admin/feed-order', checkOrigin, isAdmin, express.json({ limit: '32kb' }), async (req, res, next) => {
   try {
     const order = req.body?.order
     const savedPosts = await readPosts()
-    const validIds = new Set([...savedPosts.map(post => String(post.id)), ...[...seedPostIds].map(String)])
+    const validIds = new Set(savedPosts.map(post => String(post.id)))
     if (!Array.isArray(order) || order.length > 500 || order.some(id => !validIds.has(String(id))) || new Set(order.map(String)).size !== order.length) {
       return res.status(400).json({ error: 'El orden de publicaciones no es válido.' })
     }
@@ -203,15 +221,7 @@ app.delete('/api/admin/posts/:id', checkOrigin, isAdmin, async (req, res, next) 
   try {
     const posts = await readPosts()
     const post = posts.find(item => item.id === req.params.id)
-    if (!post) {
-      const seedId = Number(req.params.id)
-      if (!seedPostIds.has(seedId)) return res.status(404).json({ error: 'No encontramos esa publicación.' })
-      const deletedIds = await readDeletedSeedIds()
-      if (!deletedIds.includes(seedId)) await writeFile(deletedSeedsFile, JSON.stringify([...deletedIds, seedId]), 'utf8')
-      const feedOrder = await readFeedOrder()
-      await writeFile(feedOrderFile, JSON.stringify(feedOrder.filter(id => id !== String(seedId)), null, 2), 'utf8')
-      return res.status(204).end()
-    }
+    if (!post) return res.status(404).json({ error: 'No encontramos esa publicación.' })
     await writeFile(postsFile, JSON.stringify(posts.filter(item => item.id !== post.id), null, 2), 'utf8')
     const feedOrder = await readFeedOrder()
     await writeFile(feedOrderFile, JSON.stringify(feedOrder.filter(id => id !== String(post.id)), null, 2), 'utf8')
