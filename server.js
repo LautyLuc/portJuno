@@ -62,6 +62,13 @@ await mkdir(dataDir, { recursive: true })
 await mkdir(uploadsDir, { recursive: true })
 app.disable('x-powered-by')
 if (production && process.env.TRUST_PROXY === '1') app.set('trust proxy', 1)
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+  next()
+})
 app.use('/uploads', express.static(uploadsDir, { index: false, dotfiles: 'deny', maxAge: '7d', immutable: true }))
 app.use(session({
   name: 'juno.sid',
@@ -81,14 +88,18 @@ const checkOrigin = (req, res, next) => {
   next()
 }
 const loginLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Demasiados intentos. Esperá unos minutos y probá otra vez.' } })
+const mediaTypes = new Map([
+  ['image/jpeg', '.jpg'], ['image/png', '.png'], ['image/webp', '.webp'], ['image/gif', '.gif'], ['image/avif', '.avif'],
+  ['video/mp4', '.mp4'], ['video/quicktime', '.mov'], ['video/webm', '.webm'], ['video/x-m4v', '.m4v'],
+])
 const storage = multer.diskStorage({
   destination: (_req, _file, callback) => callback(null, uploadsDir),
-  filename: (_req, file, callback) => callback(null, `${randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  filename: (_req, file, callback) => callback(null, `${randomUUID()}${mediaTypes.get(file.mimetype) || '.bin'}`),
 })
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024, files: 10 },
-  fileFilter: (_req, file, callback) => callback(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')),
+  limits: { files: 10, fields: 10, parts: 30, fieldSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => mediaTypes.has(file.mimetype) ? callback(null, true) : callback(new Error('Formato no admitido. Usá JPG, PNG, WebP, GIF, AVIF, MP4, MOV o WebM.')),
 })
 const isAdmin = (req, res, next) => req.session?.admin === true ? next() : res.status(401).json({ error: 'Iniciá sesión para continuar.' })
 const sameSecret = (provided, expected) => {
@@ -240,7 +251,8 @@ if (production) {
   app.get('/{*path}', (_req, res) => res.sendFile(path.join(distDir, 'index.html')))
 }
 app.use((error, _req, res, _next) => {
-  if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Cada archivo puede pesar hasta 50 MB.' : 'No se pudieron recibir los archivos.' })
+  if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'El servidor rechazó un archivo por su tamaño.' : 'No se pudieron recibir los archivos.' })
+  if (error.message?.startsWith('Formato no admitido.')) return res.status(400).json({ error: error.message })
   console.error(error)
   res.status(500).json({ error: 'Ocurrió un error en el servidor.' })
 })
