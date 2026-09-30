@@ -81,10 +81,10 @@ const compressVideo = file => new Promise((resolve, reject) => {
   const finalPath = path.join(uploadsDir, `${path.parse(file.filename).name}.mp4`)
   const backupPath = `${file.path}.original`
   const args = [
-    '-hide_banner', '-loglevel', 'error', '-y', '-i', file.path,
+    '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-i', file.path,
     '-map', '0:v:0', '-map', '0:a?',
     '-vf', "scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p",
-    '-c:v', 'libx264', '-preset', 'fast', '-crf', '28', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-threads:v', '1', '-preset', 'veryfast', '-crf', '28', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-map_metadata', '-1', temporaryPath,
   ]
   const child = spawn(ffmpegPath, args, { windowsHide: true })
