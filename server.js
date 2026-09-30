@@ -21,6 +21,8 @@ const dataDir = path.join(__dirname, 'data')
 const uploadsDir = path.join(__dirname, 'uploads')
 const postsFile = path.join(dataDir, 'posts.json')
 const deletedSeedsFile = path.join(dataDir, 'deleted-seeds.json')
+const feedOrderFile = path.join(dataDir, 'feed-order.json')
+const projectCategories = new Set(['branding', 'diseno-web', 'audiovisual', 'social-media', 'diseno'])
 const seedPostIds = new Set([1, 2, 3, 4])
 
 if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.SESSION_SECRET) {
@@ -76,6 +78,9 @@ const readPosts = async () => {
 const readDeletedSeedIds = async () => {
   try { return JSON.parse(await readFile(deletedSeedsFile, 'utf8')) } catch (error) { if (error.code === 'ENOENT') return []; throw error }
 }
+const readFeedOrder = async () => {
+  try { return JSON.parse(await readFile(feedOrderFile, 'utf8')) } catch (error) { if (error.code === 'ENOENT') return []; throw error }
+}
 const compressVideo = file => new Promise((resolve, reject) => {
   const temporaryPath = `${file.path}.compressed.mp4`
   const finalPath = path.join(uploadsDir, `${path.parse(file.filename).name}.mp4`)
@@ -118,8 +123,23 @@ app.get('/api/auth/status', (req, res) => res.json({ authenticated: req.session?
 app.get('/api/posts', async (_req, res, next) => {
   try { res.json((await readPosts()).map(post => post.media?.length > 1 ? { ...post, type: 'Carrusel' } : post)) } catch (error) { next(error) }
 })
+app.get('/api/feed-order', async (_req, res, next) => {
+  try { res.json(await readFeedOrder()) } catch (error) { next(error) }
+})
 app.get('/api/deleted-seeds', async (_req, res, next) => {
   try { res.json(await readDeletedSeedIds()) } catch (error) { next(error) }
+})
+app.post('/api/admin/feed-order', checkOrigin, isAdmin, express.json({ limit: '32kb' }), async (req, res, next) => {
+  try {
+    const order = req.body?.order
+    const savedPosts = await readPosts()
+    const validIds = new Set([...savedPosts.map(post => String(post.id)), ...[...seedPostIds].map(String)])
+    if (!Array.isArray(order) || order.length > 500 || order.some(id => !validIds.has(String(id))) || new Set(order.map(String)).size !== order.length) {
+      return res.status(400).json({ error: 'El orden de publicaciones no es válido.' })
+    }
+    await writeFile(feedOrderFile, JSON.stringify(order.map(String), null, 2), 'utf8')
+    res.json({ saved: true })
+  } catch (error) { next(error) }
 })
 app.post('/api/auth/login', checkOrigin, loginLimit, express.json({ limit: '8kb' }), (req, res, next) => {
   if (!sameSecret(req.body?.username, process.env.ADMIN_USERNAME) || !sameSecret(req.body?.password, process.env.ADMIN_PASSWORD)) {
@@ -142,6 +162,7 @@ app.post('/api/admin/posts', checkOrigin, isAdmin, upload.fields([{ name: 'media
     const coverFile = req.files?.cover?.[0]
     const uploadedFiles = Object.values(req.files || {}).flat()
     const title = String(req.body?.title || '').trim().slice(0, 120)
+    const category = String(req.body?.category || '').trim()
     if (uploadedFiles.some(file => file.size === 0)) {
       await Promise.all(uploadedFiles.map(file => unlink(file.path).catch(() => {})))
       return res.status(400).json({ error: 'Uno de los archivos está vacío. Volvé a elegirlo.' })
@@ -150,7 +171,7 @@ app.post('/api/admin/posts', checkOrigin, isAdmin, upload.fields([{ name: 'media
       await Promise.all(uploadedFiles.map(file => unlink(file.path).catch(() => {})))
       return res.status(400).json({ error: 'La portada tiene que ser una imagen.' })
     }
-    if (!title || !files.length) {
+    if (!title || !files.length || !projectCategories.has(category)) {
       await Promise.all(uploadedFiles.map(file => unlink(file.path).catch(() => {})))
       return res.status(400).json({ error: 'Agregá un título y al menos un archivo.' })
     }
@@ -163,7 +184,7 @@ app.post('/api/admin/posts', checkOrigin, isAdmin, upload.fields([{ name: 'media
     }
     const type = files.length > 1 ? 'Carrusel' : files[0].mimetype.startsWith('video/') ? 'Video' : 'Foto'
     const post = {
-      id: randomUUID(), type, title,
+      id: randomUUID(), type, title, category,
       ...(coverFile ? { cover: `/uploads/${coverFile.filename}` } : {}),
       caption: String(req.body?.caption || '').trim().slice(0, 1200),
       location: String(req.body?.location || '').trim().slice(0, 120).toUpperCase(),
@@ -173,6 +194,8 @@ app.post('/api/admin/posts', checkOrigin, isAdmin, upload.fields([{ name: 'media
     const posts = await readPosts()
     posts.unshift(post)
     await writeFile(postsFile, JSON.stringify(posts, null, 2), 'utf8')
+    const feedOrder = await readFeedOrder()
+    await writeFile(feedOrderFile, JSON.stringify([String(post.id), ...feedOrder.filter(id => id !== String(post.id))], null, 2), 'utf8')
     res.status(201).json(post)
   } catch (error) { next(error) }
 })
@@ -185,9 +208,13 @@ app.delete('/api/admin/posts/:id', checkOrigin, isAdmin, async (req, res, next) 
       if (!seedPostIds.has(seedId)) return res.status(404).json({ error: 'No encontramos esa publicación.' })
       const deletedIds = await readDeletedSeedIds()
       if (!deletedIds.includes(seedId)) await writeFile(deletedSeedsFile, JSON.stringify([...deletedIds, seedId]), 'utf8')
+      const feedOrder = await readFeedOrder()
+      await writeFile(feedOrderFile, JSON.stringify(feedOrder.filter(id => id !== String(seedId)), null, 2), 'utf8')
       return res.status(204).end()
     }
     await writeFile(postsFile, JSON.stringify(posts.filter(item => item.id !== post.id), null, 2), 'utf8')
+    const feedOrder = await readFeedOrder()
+    await writeFile(feedOrderFile, JSON.stringify(feedOrder.filter(id => id !== String(post.id)), null, 2), 'utf8')
     const storedFiles = [...(post.media || []).map(media => media.src), post.cover].filter(Boolean)
     await Promise.all(storedFiles.map(src => {
       if (typeof src !== 'string' || !src.startsWith('/uploads/')) return Promise.resolve()
