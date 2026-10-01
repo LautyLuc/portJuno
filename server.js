@@ -17,9 +17,18 @@ const app = express()
 const FileStore = FileStoreFactory(session)
 const port = Number(process.env.PORT || 3000)
 const production = process.env.NODE_ENV === 'production'
-const deploymentVersionsDir = path.resolve(__dirname, '..', '..')
-const isHostingerVersion = path.basename(deploymentVersionsDir) === 'versions' && path.basename(path.dirname(deploymentVersionsDir)) === 'hbuilds'
-const hostingerDomainDir = isHostingerVersion ? path.resolve(deploymentVersionsDir, '..', '..') : null
+const deploymentAppParent = path.dirname(__dirname)
+const deploymentAppGrandparent = path.dirname(deploymentAppParent)
+const versionedHbuildsDir = path.basename(deploymentAppGrandparent) === 'versions' && path.basename(path.dirname(deploymentAppGrandparent)) === 'hbuilds'
+  ? path.dirname(deploymentAppGrandparent)
+  : null
+const currentHbuildsDir = path.basename(deploymentAppParent) === 'current' && path.basename(deploymentAppGrandparent) === 'hbuilds'
+  ? deploymentAppGrandparent
+  : null
+const hostingerHbuildsDir = versionedHbuildsDir || currentHbuildsDir
+const isHostingerVersion = Boolean(hostingerHbuildsDir)
+const deploymentVersionsDir = versionedHbuildsDir ? path.join(versionedHbuildsDir, 'versions') : currentHbuildsDir ? path.join(currentHbuildsDir, 'versions') : null
+const hostingerDomainDir = hostingerHbuildsDir ? path.dirname(hostingerHbuildsDir) : null
 const storageRoot = process.env.JUNO_STORAGE_DIR?.trim() ? path.resolve(process.env.JUNO_STORAGE_DIR) : hostingerDomainDir ? path.join(hostingerDomainDir, 'juno-storage') : __dirname
 const dataDir = path.join(storageRoot, 'data')
 const uploadsDir = path.join(storageRoot, 'uploads')
@@ -35,6 +44,9 @@ const migratePreviousHostingerData = async () => {
     const versionApp = path.join(deploymentVersionsDir, version.name, 'nodejs')
     try { return { versionApp, modified: (await stat(path.join(versionApp, 'data', 'posts.json'))).mtimeMs } } catch { return null }
   }))).filter(Boolean).sort((a, b) => b.modified - a.modified)
+  const legacyApp = path.join(hostingerDomainDir, 'nodejs')
+  try { candidates.push({ versionApp: legacyApp, modified: (await stat(path.join(legacyApp, 'data', 'posts.json'))).mtimeMs }) } catch {}
+  candidates.sort((a, b) => b.modified - a.modified)
   const previousApp = candidates[0]?.versionApp
   if (!previousApp) return
   await mkdir(dataDir, { recursive: true })
@@ -227,6 +239,43 @@ app.post('/api/admin/posts', checkOrigin, isAdmin, upload.fields([{ name: 'media
     await writeFile(feedOrderFile, JSON.stringify([String(post.id), ...feedOrder.filter(id => id !== String(post.id))], null, 2), 'utf8')
     res.status(201).json(post)
   } catch (error) { next(error) }
+})
+app.patch('/api/admin/posts/:id', checkOrigin, isAdmin, upload.single('cover'), async (req, res, next) => {
+  const coverFile = req.file
+  try {
+    const title = String(req.body?.title || '').trim().slice(0, 120)
+    const caption = String(req.body?.caption || '').trim().slice(0, 1200)
+    const category = String(req.body?.category || '').trim()
+    const inputDate = String(req.body?.date || '')
+    const dateParts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(inputDate)
+    const validDate = dateParts && !Number.isNaN(Date.parse(`${inputDate}T00:00:00Z`)) && new Date(`${inputDate}T00:00:00Z`).toISOString().slice(0, 10) === inputDate
+    if (!title || (category && !projectCategories.has(category)) || !validDate || (coverFile && (!coverFile.mimetype.startsWith('image/') || coverFile.size === 0))) {
+      if (coverFile) await unlink(coverFile.path).catch(() => {})
+      return res.status(400).json({ error: 'Revisá el título, la fecha, la categoría y la portada.' })
+    }
+    const posts = await readPosts()
+    const index = posts.findIndex(item => item.id === req.params.id)
+    if (index < 0) {
+      if (coverFile) await unlink(coverFile.path).catch(() => {})
+      return res.status(404).json({ error: 'No encontramos esa publicación.' })
+    }
+    const previous = posts[index]
+    const date = `${dateParts[3]}.${dateParts[2]}.${dateParts[1].slice(-2)}`
+    const removeCover = req.body?.removeCover === 'true'
+    const nextPost = { ...previous, title, caption, date }
+    if (category) nextPost.category = category
+    if (coverFile) nextPost.cover = `/uploads/${coverFile.filename}`
+    else if (removeCover) delete nextPost.cover
+    posts[index] = nextPost
+    await writeFile(postsFile, JSON.stringify(posts, null, 2), 'utf8')
+    if ((coverFile || removeCover) && previous.cover?.startsWith('/uploads/')) {
+      await unlink(path.join(uploadsDir, path.basename(previous.cover))).catch(() => {})
+    }
+    res.json(nextPost)
+  } catch (error) {
+    if (coverFile) await unlink(coverFile.path).catch(() => {})
+    next(error)
+  }
 })
 app.delete('/api/admin/posts/:id', checkOrigin, isAdmin, async (req, res, next) => {
   try {

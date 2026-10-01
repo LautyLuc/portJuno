@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronLeft, ChevronRight, Clapperboard, GripVertical, Images, Menu, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpRight, Camera, Check, ChevronLeft, ChevronRight, Clapperboard, GripVertical, Images, Menu, Pencil, Plus, Save, Search, Trash2, X } from 'lucide-react'
 
 const projectCategories = [
   { value: 'branding', label: 'Branding' },
@@ -9,6 +9,11 @@ const projectCategories = [
   { value: 'diseno', label: 'Diseño' },
 ]
 const categoryLabel = value => projectCategories.find(category => category.value === value)?.label || ''
+const dateForInput = value => {
+  const match = /^(\d{2})\.(\d{2})\.(\d{2})$/.exec(String(value || ''))
+  if (match) return `20${match[3]}-${match[2]}-${match[1]}`
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? value : ''
+}
 function LoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -37,6 +42,9 @@ function Portfolio() {
   const [draggingId, setDraggingId] = useState(null)
   const [formOpen, setFormOpen] = useState(false)
   const [active, setActive] = useState(null)
+  const [editingActive, setEditingActive] = useState(false)
+  const [activeEdit, setActiveEdit] = useState({ title: '', caption: '', date: '', category: '', cover: null, removeCover: false })
+  const [savingActiveEdit, setSavingActiveEdit] = useState(false)
   const [form, setForm] = useState({title:'',caption:'',location:'',type:'Foto',category:'',media:[],cover:null})
   const [notice, setNotice] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -138,7 +146,40 @@ function Portfolio() {
   }
   const logout = async () => { await fetch('/api/auth/logout', {method:'POST'}); setAdmin(false); setFormOpen(false); setReorderMode(false) }
   const [slide,setSlide] = useState(0)
-  const closeDetail = () => { setActive(null); setSlide(0) }
+  const closeDetail = () => { setActive(null); setSlide(0); setEditingActive(false) }
+  const startActiveEdit = () => {
+    const fallbackCategory = active.type === 'Video' ? 'audiovisual' : active.type === 'Carrusel' ? 'social-media' : 'branding'
+    const category = projectCategories.some(item => item.value === active.category) ? active.category : fallbackCategory
+    setActiveEdit({ title: active.title || '', caption: active.caption || '', date: dateForInput(active.date), category, cover: null, removeCover: false })
+    setEditingActive(true)
+  }
+  const changeActiveEdit = (key, value) => setActiveEdit(current => ({ ...current, [key]: value }))
+  const saveActiveEdit = async event => {
+    event.preventDefault()
+    if (!active || savingActiveEdit) return
+    const body = new FormData()
+    body.set('title', activeEdit.title)
+    body.set('caption', activeEdit.caption)
+    body.set('date', activeEdit.date)
+    body.set('category', activeEdit.category)
+    body.set('removeCover', String(activeEdit.removeCover))
+    if (activeEdit.cover) body.set('cover', activeEdit.cover)
+    setSavingActiveEdit(true)
+    try {
+      const response = await fetch(`/api/admin/posts/${encodeURIComponent(active.id)}`, { method: 'PATCH', body })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'No se pudieron guardar los cambios.')
+      setPosts(current => current.map(post => post.id === result.id ? result : post))
+      setActive(result)
+      setEditingActive(false)
+      setNotice('Cambios guardados')
+    } catch (error) {
+      setNotice(error.message || 'No se pudieron guardar los cambios.')
+    } finally {
+      setSavingActiveEdit(false)
+      setTimeout(() => setNotice(''), 3500)
+    }
+  }
   return <>
     <header className="topbar"><a className="wordmark" href="#inicio"><img src="/juno-logo.png" alt="Juno Studio"/></a><nav><a href="#trabajo">TRABAJO</a><a href="#sobre">EL ESTUDIO</a><a href="https://junostudio.art/#contacto">CONTACTO <ArrowUpRight size={13}/></a></nav><div className="top-actions">{admin&&<button className="admin-toggle" onClick={logout}>CERRAR SESIÓN</button>}<button className="menu-btn" aria-label="Abrir menú"><Menu/></button></div></header>
     <main id="inicio"><section className="hero"><div className="hero-copy"><div className="eyebrow"><span className="eyebrow-line"/> BRANDING · AUDIOVISUAL · DISEÑO DIGITAL</div><h1>Ideas que<br/>hacen <em>marca.</em></h1><p>Acompañamos marcas a verse, sonar<br/>y sentirse como ellas mismas.</p><a className="discover" href="#trabajo">DESCUBRIR EL TRABAJO <ArrowDown size={14}/></a></div><div className="hero-visual hero-empty" aria-hidden="true"></div><div className="hero-index">PORTAFOLIO INDEPENDIENTE <span>BUENOS AIRES · 2024</span></div></section>
@@ -151,7 +192,8 @@ function Portfolio() {
     <footer><a className="wordmark" href="#inicio"><img src="/juno-logo.png" alt="Juno Studio"/></a><span>ESTUDIO CREATIVO · ARGENTINA</span><div><a href="mailto:contacto@junostudio.art">CONTACTO</a><a href="#inicio">VOLVER ARRIBA ↑</a></div><small>© 2024 JUNO STUDIO</small></footer></main>
     {admin&&<button className="add-post" onClick={()=>setFormOpen(true)}><Plus size={17}/> NUEVA PUBLICACIÓN</button>}
     {notice&&<div className="toast"><Check size={16}/>{notice}</div>}
-    {active&&<div className="modal-backdrop" onClick={closeDetail}><div className="detail-modal" onClick={e=>e.stopPropagation()}><button className="modal-close" onClick={closeDetail}><X/></button><div className="detail-image" style={{aspectRatio:mediaRatios[active.media[slide]?.src||active.media[slide]]||'1 / 1'}}>{active.media[slide]?.video?<video src={active.media[slide].src||active.media[slide]} poster={active.cover||undefined} controls controlsList="nodownload" disablePictureInPicture playsInline preload="auto" onContextMenu={e=>e.preventDefault()} onLoadedMetadata={e=>rememberRatio(active.media[slide].src||active.media[slide],e.currentTarget.videoWidth,e.currentTarget.videoHeight)} onError={()=>{setNotice('No se pudo reproducir: el archivo puede estar vacío o usar un códec incompatible.');setTimeout(()=>setNotice(''),4500)}}/>:<img src={typeof active.media[slide]==='string'?active.media[slide]:active.media[slide]?.src} onLoad={e=>rememberRatio(active.media[slide]?.src||active.media[slide],e.currentTarget.naturalWidth,e.currentTarget.naturalHeight)}/>}{active.media.length>1&&<><button className="slide prev" onClick={()=>setSlide((slide-1+active.media.length)%active.media.length)}><ChevronLeft/></button><button className="slide next" onClick={()=>setSlide((slide+1)%active.media.length)}><ChevronRight/></button><div className="slide-count">{slide+1} / {active.media.length}</div></>}</div><div className="detail-copy"><div className="eyebrow">{active.type.toUpperCase()} · {active.location}</div><h2>{active.title}</h2><p>{active.caption}</p><span>{active.date}</span></div></div></div>}
+    {active&&<div className="modal-backdrop" onClick={closeDetail}><div className="detail-modal" onClick={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={closeDetail}><X/></button><div className="detail-image" style={{aspectRatio:mediaRatios[active.media[slide]?.src||active.media[slide]]||'1 / 1'}}>{active.media[slide]?.video?<video src={active.media[slide].src||active.media[slide]} poster={active.cover||undefined} controls controlsList="nodownload" disablePictureInPicture playsInline preload="auto" onContextMenu={e=>e.preventDefault()} onLoadedMetadata={e=>rememberRatio(active.media[slide].src||active.media[slide],e.currentTarget.videoWidth,e.currentTarget.videoHeight)} onError={()=>{setNotice('No se pudo reproducir el archivo.');setTimeout(()=>setNotice(''),4500)}}/>:<img src={typeof active.media[slide]==='string'?active.media[slide]:active.media[slide]?.src} onLoad={e=>rememberRatio(active.media[slide]?.src||active.media[slide],e.currentTarget.naturalWidth,e.currentTarget.naturalHeight)}/>}{active.media.length>1&&<><button className="slide prev" onClick={()=>setSlide((slide-1+active.media.length)%active.media.length)}><ChevronLeft/></button><button className="slide next" onClick={()=>setSlide((slide+1)%active.media.length)}><ChevronRight/></button><div className="slide-count">{slide+1} / {active.media.length}</div></>}</div><div className="detail-copy">{editingActive?<form className="detail-edit-form" onSubmit={saveActiveEdit}><div className="eyebrow">EDITAR PUBLICACIÓN</div><label className="field-label">TÍTULO<input required maxLength="120" value={activeEdit.title} onChange={e=>changeActiveEdit('title',e.target.value)}/></label><label className="field-label">DESCRIPCIÓN<textarea maxLength="1200" rows="4" value={activeEdit.caption} onChange={e=>changeActiveEdit('caption',e.target.value)}/></label><label className="field-label">FECHA DEL TRABAJO<input required type="date" value={activeEdit.date} onChange={e=>changeActiveEdit('date',e.target.value)}/></label><label className="field-label">CATEGORÍA<select required value={activeEdit.category} onChange={e=>changeActiveEdit('category',e.target.value)}>{projectCategories.map(category=><option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="cover-picker"><span>PORTADA</span>{active.cover&&<small>Portada actual: <a href={active.cover} target="_blank" rel="noreferrer">ver imagen</a></small>}<input type="file" accept="image/*" onChange={e=>changeActiveEdit('cover',e.target.files[0]||null)}/>{activeEdit.cover&&<small>Nueva portada: {activeEdit.cover.name}</small>}{active.cover&&<span className="remove-cover-option"><input type="checkbox" checked={activeEdit.removeCover} onChange={e=>changeActiveEdit('removeCover',e.target.checked)}/> Quitar portada actual</span>}</label><div className="detail-edit-actions"><button className="publish" type="submit" disabled={savingActiveEdit}>{savingActiveEdit?'GUARDANDO…':<>GUARDAR CAMBIOS <Save size={15}/></>}</button><button className="edit-cancel" type="button" onClick={()=>setEditingActive(false)} disabled={savingActiveEdit}>Cancelar</button></div></form>:<><div className="eyebrow">{active.type.toUpperCase()} · {active.location}</div><h2>{active.title}</h2><p>{active.caption}</p><span>{active.date}</span>{admin&&<button type="button" className="edit-post-button" onClick={startActiveEdit}><Pencil size={14}/> EDITAR PUBLICACIÓN</button>}</>}</div></div></div>}
+
     {formOpen&&<div className="modal-backdrop" onClick={()=>setFormOpen(false)}><form className="upload-modal" onSubmit={publish} onClick={e=>e.stopPropagation()}><button type="button" className="modal-close" onClick={()=>setFormOpen(false)}><X/></button><div className="eyebrow"><span className="eyebrow-line"/> PANEL DE ADMINISTRACIÓN</div><h2>Nueva <em>historia.</em></h2><label className="field-label">TÍTULO<input required value={form.title} onChange={e=>change('title',e.target.value)} placeholder="Ej. Luz de invierno"/></label><label className="field-label">PIE DE PUBLICACIÓN<textarea value={form.caption} onChange={e=>change('caption',e.target.value)} placeholder="Contá algo sobre esta historia..." rows="3"/></label><label className="field-label">LUGAR<input value={form.location} onChange={e=>change('location',e.target.value)} placeholder="Buenos Aires, Argentina"/></label><label className="field-label">CATEGORÍA<select required value={form.category} onChange={e=>change('category',e.target.value)}><option value="">Elegí un área</option>{projectCategories.map(category=><option key={category.value} value={category.value}>{category.label}</option>)}</select></label><label className="file-drop"><input type="file" accept="image/*,video/*" multiple onChange={filesChanged}/><span className="file-icon"><Plus/></span><strong>Elegí fotos o videos</strong><small>Podés seleccionar varios archivos. Sin límite fijo por archivo; el alojamiento puede aplicar sus propios límites. Los videos se optimizan al publicar.</small></label><label className="cover-picker"><span>PORTADA OPCIONAL</span><input type="file" accept="image/*" onChange={e=>change("cover",e.target.files[0]||null)}/><small>Se usa como miniatura del post, sin sumarse al carrusel.</small></label>{form.cover&&<div className="cover-selected">Portada: {form.cover.name}<button type="button" onClick={()=>change("cover",null)}>Quitar</button></div>}{form.media.length>0&&<div className="selected-files">{form.media.map((m,i)=><span key={i}>{m.name} <button type="button" onClick={()=>change('media',form.media.filter((_,ix)=>ix!==i))}><X size={12}/></button></span>)}</div>}{uploading&&<div className="upload-progress" role="status" aria-live="polite"><div className="upload-progress-label"><span>{uploadStage==='sending'?'Subiendo archivos':uploadStage==='processing'?'Optimizando video':'Guardando publicación'}</span><strong>{uploadStage==='processing'?'...':uploadPercent+'%'}</strong></div><div className="upload-progress-track"><div className={'upload-progress-fill '+(uploadStage==='processing'?'processing':'')} style={{width:(uploadStage==='processing'?100:uploadPercent)+'%'}}/></div><small>{uploadStage==='processing'?'La carga terminó; estamos preparando el video para la web.':'No cierres esta ventana hasta que termine la publicación.'}</small></div>}<button className="publish" type="submit" disabled={uploading}>{uploading ? "PUBLICANDO..." : "PUBLICAR HISTORIA"} <ArrowUpRight size={15}/></button><small className="storage-note">Los archivos se guardan en el servidor del sitio.</small></form></div>}
   </>
 }
